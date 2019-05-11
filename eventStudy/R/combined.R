@@ -1,13 +1,19 @@
 #' @export
 ES <- function(long_data, outcomevar, unit_var, cal_time_var, onset_time_var, cluster_vars,
                omitted_event_time= -2, anticipation = 0, min_control_gap=1, max_control_gap=Inf, linearize_pretrends=FALSE,
-               control_subset_var=NA, control_subset_event_time=0,
-               treated_subset_var=NA, treated_subset_event_time=0,
+               control_subset_var=NA, control_subset_event_time=0, treated_subset_var=NA, treated_subset_event_time=0,
+               control_subset_var2=NA, control_subset_event_time2=0, treated_subset_var2=NA, treated_subset_event_time2=0,
+               control_subset_var3=NA, control_subset_event_time3=0, treated_subset_var3=NA, treated_subset_event_time3=0,
+               control_subset_var4=NA, control_subset_event_time4=0, treated_subset_var4=NA, treated_subset_event_time4=0,
+               control_subset_var5=NA, control_subset_event_time5=0, treated_subset_var5=NA, treated_subset_event_time5=0,
                fill_zeros=FALSE, residualize_covariates = FALSE, discrete_covars = NULL, cont_covars = NULL, never_treat_action = 'none',
                homogeneous_ATT = FALSE, num_cores = 1, reg_weights = NULL, add_unit_fes = FALSE,
                bootstrapES = FALSE, bootstrap_iters = 1,
                ipw = FALSE, ipw_model = 'linear', ipw_composition_change = FALSE, ipw_data = FALSE, event_vs_noevent = FALSE,
-               ref_discrete_covars = NULL, ref_discrete_covar_event_time=0, ref_cont_covars = NULL, ref_cont_covar_event_time=0){
+               ref_discrete_covars = NULL, ref_discrete_covar_event_time=0, ref_cont_covars = NULL, ref_cont_covar_event_time=0,
+               cohort_by_cohort = FALSE, restrict_pre = NA, restrict_post = NA, matching_var = NULL, matching_var_quartile = NA, matching_var_avg = FALSE,
+               pass_var = NULL, final_outcome = NA, final_outcome_time = NA,
+               linearize_pretrends_ES = FALSE){
 
   flog.info("Beginning ES.")
 
@@ -49,6 +55,10 @@ ES <- function(long_data, outcomevar, unit_var, cal_time_var, onset_time_var, cl
   assertIntegerish(bootstrap_iters,len=1,lower=1)
   assertFlag(ipw)
   assertFlag(ipw_composition_change)
+  assertFlag(cohort_by_cohort)
+  if(!is.null(pass_var)){
+    assertCharacter(pass_var,len=1)
+  }
 
   # check that anticipation choice and omitted_event_time choice don't conflict
   if(omitted_event_time + anticipation > -1){
@@ -100,6 +110,19 @@ ES <- function(long_data, outcomevar, unit_var, cal_time_var, onset_time_var, cl
     }
   }
   assertIntegerish(ref_cont_covar_event_time,len=1)
+
+  if(testCharacter(matching_var)){
+    for(vv in matching_var){
+      if(!(vv %in% names(long_data))){stop(sprintf("Variable matching_var='%s' is not in the long_data you provided.",vv))}
+    }
+  }
+  if(!is.null(pass_var)){
+    if(testCharacter(pass_var)){
+      for(vv in pass_var){
+        if(!(vv %in% names(long_data))){stop(sprintf("Variable pass_var='%s' is not in the long_data you provided.",vv))}
+      }
+    }
+  }
 
   # check that control variables don't overlap with design variables (e.g., cal_time_var, and onset_time_var)
   design_vars <- c(cal_time_var, onset_time_var)
@@ -190,6 +213,18 @@ ES <- function(long_data, outcomevar, unit_var, cal_time_var, onset_time_var, cl
                                            reg_weights = reg_weights)
   }
 
+  if(linearize_pretrends_ES){
+    # will need an extra degree of freedom in the pre-period, so will potentially drop cohorts treated earliest
+    # will find the earliest cohort with such a time available, and drop those before it
+    all_onset_times <- sort(long_data[, unique(get(onset_time_var))])
+    first_cal_time <- long_data[, min(get(cal_time_var))]
+    keep_onset_times <-  all_onset_times[all_onset_times - anticipation - 1 > first_cal_time]
+
+    long_data <- long_data[get(onset_time_var) %in% keep_onset_times]
+    rm(all_onset_times, first_cal_time, keep_onset_times)
+    gc()
+  }
+
   # process data
   flog.info("Beginning data stacking.")
   ES_data <- ES_clean_data(long_data = long_data, outcomevar = outcomevar,
@@ -197,9 +232,156 @@ ES <- function(long_data, outcomevar, unit_var, cal_time_var, onset_time_var, cl
                            anticipation = anticipation, min_control_gap = min_control_gap, max_control_gap = max_control_gap, omitted_event_time = omitted_event_time,
                            control_subset_var = control_subset_var, control_subset_event_time = control_subset_event_time,
                            treated_subset_var = treated_subset_var, treated_subset_event_time = treated_subset_event_time,
+                           control_subset_var2 = control_subset_var2, control_subset_event_time2 = control_subset_event_time2,
+                           treated_subset_var2 = treated_subset_var2, treated_subset_event_time2 = treated_subset_event_time2,
+                           control_subset_var3 = control_subset_var3, control_subset_event_time3 = control_subset_event_time3,
+                           treated_subset_var3 = treated_subset_var3, treated_subset_event_time3 = treated_subset_event_time3,
+                           control_subset_var4 = control_subset_var4, control_subset_event_time4 = control_subset_event_time4,
+                           treated_subset_var4 = treated_subset_var4, treated_subset_event_time4 = treated_subset_event_time4,
+                           control_subset_var5 = control_subset_var5, control_subset_event_time5 = control_subset_event_time5,
+                           treated_subset_var5 = treated_subset_var5, treated_subset_event_time5 = treated_subset_event_time5,
                            never_treat_action = never_treat_action, never_treat_val = never_treat_val,
                            cluster_vars = cluster_vars, discrete_covars = discrete_covars, cont_covars = cont_covars, reg_weights = reg_weights, event_vs_noevent = event_vs_noevent,
-                           ref_discrete_covars = ref_discrete_covars, ref_cont_covars = ref_cont_covars)
+                           ref_discrete_covars = ref_discrete_covars, ref_cont_covars = ref_cont_covars,
+                           matching_var = matching_var, matching_var_quartile = matching_var_quartile, matching_var_avg = matching_var_avg, pass_var = pass_var)
+
+  if((!is.na(restrict_pre)) | (!is.na(restrict_post))){
+
+    # Restrict ES_data to only use observations observed within the 'restrict_pre' to 'restrict_post' event times
+
+    if((!is.na(restrict_pre)) & (!is.na(restrict_post))){
+      ES_data <- ES_data[between(ref_event_time, restrict_pre, restrict_post, incbounds = TRUE)]
+      gc()
+    } else if((!is.na(restrict_pre)) & (is.na(restrict_post))){
+      ES_data <- ES_data[ref_event_time >= restrict_pre]
+      gc()
+    } else if((is.na(restrict_pre)) & (!is.na(restrict_post))){
+      ES_data <- ES_data[ref_event_time <= restrict_post]
+      gc()
+    }
+
+    # But the above will keep all of the omitted_event_time observations even from the excluded CATTs (since that is always the omitted group)
+    # So also want to remove catt_specific_sample cases with only -2
+    ES_data[, max_time := max(ref_event_time), by = list(ref_onset_time, catt_specific_sample)]
+    ES_data[, min_time := min(ref_event_time), by = list(ref_onset_time, catt_specific_sample)]
+    ES_data <- ES_data[max_time != min_time]
+    ES_data[, c("max_time", "min_time") := NULL]
+    gc()
+
+  }
+
+  # linearize pre-trends; never-treated will be treated as a single cohort
+  if(linearize_pretrends_ES){
+    flog.info("Linearizing pre-trends using stacked data.")
+
+    # For the treated, will use the observations before the anticipation to detrend (by ref_onset_time)
+    onset_times_detrend <- ES_data[, unique(ref_onset_time)]
+
+    ES_data[, trend := (ref_event_time - min(ref_event_time)) + 1, by = list(ref_onset_time)]
+    lm_formula_input <- "1 + trend"
+
+    for(onset_time in onset_times_detrend){
+
+      if(!(is.null(reg_weights))){
+        est <- lm(as.formula(paste0(eval(outcomevar), " ~ ", lm_formula_input)),
+                  data = ES_data[(ref_onset_time == onset_time) & (ref_event_time < (0 - anticipation)) & treated == 1][[reg_weights]],
+                  model = FALSE
+        )
+      } else{
+        est <- lm(as.formula(paste0(eval(outcomevar), " ~ ", lm_formula_input)),
+                  data = ES_data[(ref_onset_time == onset_time) & (ref_event_time < (0 - anticipation)) & treated == 1],
+                  model = FALSE
+        )
+      }
+
+      treated_int <- est$coefficients[["(Intercept)"]]
+      treated_pre_slope <- est$coefficients[["trend"]]
+      rm(est)
+
+      if(!(is.null(reg_weights))){
+        est <- lm(as.formula(paste0(eval(outcomevar), " ~ ", lm_formula_input)),
+                  data = ES_data[(ref_onset_time == onset_time) & treated == 0][[reg_weights]],
+                  model = FALSE
+        )
+      } else{
+        est <- lm(as.formula(paste0(eval(outcomevar), " ~ ", lm_formula_input)),
+                  data = ES_data[(ref_onset_time == onset_time) & treated == 0],
+                  model = FALSE
+        )
+      }
+
+      control_int <- est$coefficients[["(Intercept)"]]
+      control_pre_slope <- est$coefficients[["trend"]]
+      rm(est)
+
+      ES_data[ref_onset_time == onset_time & treated == 1, pre_int := treated_int]
+      ES_data[ref_onset_time == onset_time & treated == 1, pre_slope := treated_pre_slope]
+      ES_data[ref_onset_time == onset_time & treated == 0, pre_int := control_int]
+      ES_data[ref_onset_time == onset_time & treated == 0, pre_slope := control_pre_slope]
+      ES_data[ref_onset_time == onset_time, detrend := get(outcomevar) - (pre_int + (trend * pre_slope))]
+
+      ES_treatcontrol_means1 <- ES_data[ref_onset_time == onset_time,list(rn="treatment_means",
+                                                                          old_estimate = mean(get(outcomevar)),
+                                                                          new_estimate = mean(detrend)),
+                                        list(ref_onset_time,ref_event_time,treated)][order(ref_onset_time,ref_event_time,treated)]
+      # plot(x = ES_treatcontrol_means1[treated == 1]$ref_event_time, y = ES_treatcontrol_means1[treated == 1]$old_estimate)
+      # plot(x = ES_treatcontrol_means1[treated == 0]$ref_event_time, y = ES_treatcontrol_means1[treated == 0]$old_estimate)
+      # plot(x = ES_treatcontrol_means1[treated == 1]$ref_event_time, y = ES_treatcontrol_means1[treated == 1]$new_estimate)
+      # plot(x = ES_treatcontrol_means1[treated == 0]$ref_event_time, y = ES_treatcontrol_means1[treated == 0]$new_estimate)
+
+    }
+
+    ES_data[, (outcomevar) := NULL]
+    setnames(ES_data, "detrend", outcomevar)
+
+  }
+
+  if(!is.na(final_outcome)){
+
+    print(sprintf("Starting construction of dynamic outcome: %s", final_outcome))
+
+    # Make the real outcome of interest which is defined dynamically using 'outcome'
+    # The outcome will be defined as a change in state relative to 'outcome' measured in omitted_event_time unique to each ref_onset_time
+
+    # For state, need a numeric version
+    if(final_outcome == "moved_state"){
+      ES_data[, pre_num := .GRP, by = outcomevar]
+
+      # Define the time-invariant outcome for all units within a ref_onset_time
+      ES_data[, ref_state_var := max(as.integer(pre_num*(ref_event_time==final_outcome_time))), by=c(unit_var, "ref_onset_time")]
+      ES_data[, post_state_var := max(as.integer(pre_num*(!(ref_event_time==final_outcome_time)))), by=c(unit_var, "ref_onset_time", "catt_specific_sample")]
+
+    } else{
+      # Define the time-invariant outcome for all units within a ref_onset_time
+      ES_data[, ref_state_var := max(as.integer(get(outcomevar)*(ref_event_time==final_outcome_time))), by=c(unit_var, "ref_onset_time")]
+      ES_data[, post_state_var := max(as.integer(get(outcomevar)*(!(ref_event_time==final_outcome_time)))), by=c(unit_var, "ref_onset_time", "catt_specific_sample")]
+
+    }
+
+    # ES_data[, (final_outcome) := as.integer(!(ref_state_var == post_state_var))]
+    # ES_data[ref_event_time == final_outcome_time, (final_outcome) := 0]
+
+    # In this "first change since omitted_event_time" approach, no good way to think about events prior to omitted_event_time
+    # So they will just be 0, as will all of the ref_event_time == omitted_event_time
+    ES_data[, outcome_change := as.integer(!(ref_state_var == post_state_var))]
+    ES_data[, annual_outcome := 0L]
+    ES_data[ref_event_time > final_outcome_time, annual_outcome := outcome_change]
+    #
+    # # Now just need to assign 1 for all after the first
+    ES_data[, change_date := ref_event_time * annual_outcome]
+    ES_data[change_date == 0 & (!(ref_event_time == 0 & annual_outcome == 1)), change_date := 9999] # just a kludge so I can take the min and exclude the 0s not due to the 0th event time
+    ES_data[, first_date_change := min(change_date), by=c(unit_var, "ref_onset_time")]
+    ES_data[, (final_outcome) := as.integer(ref_event_time >= first_date_change)] # for those wih no changes, first_date_change will be 9999 and so the expression will have 0s, which is desired.
+
+    outcomevar <- final_outcome
+
+    print(sprintf("We have outcomevar = '%s'", outcomevar))
+    print(ES_data[, unique(ref_onset_time)])
+
+    ES_data[, c("ref_state_var", "post_state_var", "outcome_change", "annual_outcome", "change_date", "first_date_change") := NULL]
+    gc()
+
+  }
 
   # construct discrete covariates specific to a ref_event_time
   # will be time invariant for a given ref_onset_time == ref_discrete_covar_event_time, but time-varying across ref_onset_times
@@ -356,6 +538,8 @@ ES <- function(long_data, outcomevar, unit_var, cal_time_var, onset_time_var, cl
                                          reg_weights = reg_weights,
                                          ipw = ipw,
                                          ipw_composition_change = ipw_composition_change,
+                                         cohort_by_cohort = cohort_by_cohort,
+                                         num_cores = num_cores,
                                          add_unit_fes = add_unit_fes)
 
     catt_coefs <- ES_results_hetero[[2]]
@@ -382,7 +566,10 @@ ES <- function(long_data, outcomevar, unit_var, cal_time_var, onset_time_var, cl
                                      reg_weights = reg_weights,
                                      ipw = ipw,
                                      ipw_composition_change = ipw_composition_change,
+                                     cohort_by_cohort = FALSE,
+                                     num_cores = num_cores,
                                      add_unit_fes = add_unit_fes)[[1]]
+
   setnames(ES_results_homo,c(onset_time_var,"event_time"),c("ref_onset_time","ref_event_time"))
 
   # collect levels by treatment/control
@@ -412,6 +599,21 @@ ES <- function(long_data, outcomevar, unit_var, cal_time_var, onset_time_var, cl
   }
   # omitted_event_time is excluded, so let's ensure it is excluded from the above as well
   ES_treat_count_V2 <- ES_treat_count_V2[ref_event_time != omitted_event_time]
+
+  # Collect CATT-specific-sample means of the outcome in the omitted_event_time (for scaling results)
+  means <- ES_data[ref_event_time == omitted_event_time, list(mean_outcome = mean(get(outcomevar))), by = list(ref_onset_time,catt_specific_sample)][order(ref_onset_time,catt_specific_sample)]
+  means[, pooled_mean := ES_data[ref_event_time == omitted_event_time, mean(get(outcomevar))]]
+
+  treat_means <- ES_data[ref_event_time == omitted_event_time & treated == 1, list(treat_mean_outcome = mean(get(outcomevar)), treat_mean_passvar = mean(get(pass_var))), by = list(ref_onset_time,catt_specific_sample)][order(ref_onset_time,catt_specific_sample)]
+  treat_means[, treat_pooled_mean := ES_data[ref_event_time == omitted_event_time & treated == 1, mean(get(outcomevar))]]
+  treat_means[, treat_pooled_passvar := ES_data[ref_event_time == omitted_event_time & treated == 1, mean(get(pass_var))]]
+
+  mapping <- ES_data[, .N, by = list(ref_onset_time,catt_specific_sample, ref_event_time)][order(ref_onset_time,catt_specific_sample,ref_event_time)]
+  mapping <- mapping[ref_event_time != omitted_event_time]
+  means <- merge(means, mapping, by = c("ref_onset_time", "catt_specific_sample"), all.x = TRUE)
+  treat_means <- merge(treat_means, mapping, by = c("ref_onset_time", "catt_specific_sample"), all.x = TRUE)
+
+  means <- list(means, treat_means)
 
   ES_data <- NULL
   gc()
@@ -458,7 +660,14 @@ ES <- function(long_data, outcomevar, unit_var, cal_time_var, onset_time_var, cl
   setorderv(weighted_V2, c("ref_event_time"))
 
   figdata <- rbindlist(list(figdata, unweighted, weighted_V1, weighted_V2), use.names = TRUE, fill=TRUE)
+
+  subsets_for_avgs <- NULL
+  weights <- NULL
+  unweighted <- NULL
+  weighted_V1 <- NULL
+  weighted_V2 <- NULL
   figdata[is.na(cluster_se), cluster_se := 0]
+  gc()
 
   # calculate SEs for weighted avg estimates using catt_coefs and catt_vcov
   # the unique "Weighted" ref_event_time values represent the target list of parameters
@@ -529,12 +738,6 @@ ES <- function(long_data, outcomevar, unit_var, cal_time_var, onset_time_var, cl
     rm(temp, equal_w_g_formula_input, cohort_w_v1_g_formula_input, cohort_w_v2_g_formula_input)
 
   }
-
-  subsets_for_avgs <- NULL
-  weights <- NULL
-  unweighted <- NULL
-  weighted_V1 <- NULL
-  weighted_V2 <- NULL
   gc()
 
   # start bootstrap run if relevant
@@ -551,11 +754,21 @@ ES <- function(long_data, outcomevar, unit_var, cal_time_var, onset_time_var, cl
                                                  linearize_pretrends = linearize_pretrends,
                                                  control_subset_var = control_subset_var, control_subset_event_time = control_subset_event_time,
                                                  treated_subset_var = treated_subset_var, treated_subset_event_time = treated_subset_event_time,
+                                                 control_subset_var2 = control_subset_var2, control_subset_event_time2 = control_subset_event_time2,
+                                                 treated_subset_var2 = treated_subset_var2, treated_subset_event_time2 = treated_subset_event_time2,
+                                                 control_subset_var3 = control_subset_var3, control_subset_event_time3 = control_subset_event_time3,
+                                                 treated_subset_var3 = treated_subset_var3, treated_subset_event_time3 = treated_subset_event_time3,
+                                                 control_subset_var4 = control_subset_var4, control_subset_event_time4 = control_subset_event_time4,
+                                                 treated_subset_var4 = treated_subset_var4, treated_subset_event_time4 = treated_subset_event_time4,
+                                                 control_subset_var5 = control_subset_var5, control_subset_event_time5 = control_subset_event_time5,
+                                                 treated_subset_var5 = treated_subset_var5, treated_subset_event_time5 = treated_subset_event_time5,
                                                  fill_zeros = fill_zeros, residualize_covariates = residualize_covariates, discrete_covars = discrete_covars, cont_covars = cont_covars,
                                                  never_treat_action = never_treat_action, homogeneous_ATT = homogeneous_ATT, reg_weights = reg_weights, add_unit_fes = add_unit_fes,
                                                  ipw = ipw, ipw_model = ipw_model, ipw_composition_change = ipw_composition_change, ipw_data = FALSE,
                                                  ref_discrete_covars = ref_discrete_covars, ref_cont_covars = ref_cont_covars,
                                                  ref_discrete_covar_event_time = ref_discrete_covar_event_time, ref_cont_covar_event_time = ref_cont_covar_event_time,
+                                                 cohort_by_cohort = cohort_by_cohort, restrict_pre = restrict_pre, restrict_post = restrict_post,
+                                                 matching_var = matching_var, matching_var_quartile = matching_var_quartile, matching_var_avg = matching_var_avg,
                                                  event_vs_noevent = event_vs_noevent),
                               use.names = TRUE
                               )
@@ -571,11 +784,19 @@ ES <- function(long_data, outcomevar, unit_var, cal_time_var, onset_time_var, cl
 
   flog.info('ES is finished.')
 
+  building_blocks <- list(catt_coefs, catt_vcov)
+
+  return_list = list()
+  return_list[[1]] <- figdata
+  return_list[[2]] <- means
+  return_list[[3]] <- building_blocks
+
+
   if(ipw_data == TRUE){
-    figdata <- rbindlist(list(figdata, ipw_dt), use.names = TRUE, fill = TRUE)
+    return_list[[4]] <- ipw_dt
   }
 
-  return(figdata)
+  return(return_list)
 }
 
 
@@ -856,12 +1077,17 @@ block_sample <- function(long_data, unit_var, cal_time_var){
 bootstrap_ES <- function(long_data, outcomevar, unit_var, cal_time_var, onset_time_var, cluster_vars,
                          omitted_event_time= -2, anticipation = 0, min_control_gap=1, max_control_gap=Inf, linearize_pretrends=FALSE,
                          control_subset_var=NA, control_subset_event_time=0, treated_subset_var=NA, treated_subset_event_time=0,
+                         control_subset_var2=NA, control_subset_event_time2=0, treated_subset_var2=NA, treated_subset_event_time2=0,
+                         control_subset_var3=NA, control_subset_event_time3=0, treated_subset_var3=NA, treated_subset_event_time3=0,
+                         control_subset_var4=NA, control_subset_event_time4=0, treated_subset_var4=NA, treated_subset_event_time4=0,
+                         control_subset_var5=NA, control_subset_event_time5=0, treated_subset_var5=NA, treated_subset_event_time5=0,
                          fill_zeros=FALSE,
                          residualize_covariates = FALSE, discrete_covars = NULL, cont_covars = NULL, never_treat_action = 'none',
                          homogeneous_ATT = FALSE, reg_weights = NULL, add_unit_fes = FALSE,
                          ipw = FALSE, ipw_model = 'linear', ipw_composition_change = FALSE, ipw_data = FALSE, event_vs_noevent = FALSE,
-                         ref_discrete_covars = NULL, ref_discrete_covar_event_time=0, ref_cont_covars = NULL, ref_cont_covar_event_time=0, iter){
-
+                         ref_discrete_covars = NULL, ref_discrete_covar_event_time=0, ref_cont_covars = NULL, ref_cont_covar_event_time=0,
+                         cohort_by_cohort = FALSE, restrict_pre = NA, restrict_post = NA, matching_var = NULL, matching_var_quartile = NA, matching_var_avg = FALSE,
+                         iter){
 
   bs_long_data <- block_sample(long_data = copy(long_data), unit_var = unit_var, cal_time_var = cal_time_var)
 
@@ -902,6 +1128,8 @@ bootstrap_ES <- function(long_data, outcomevar, unit_var, cal_time_var, onset_ti
   assertFlag(add_unit_fes)
   assertFlag(ipw)
   assertFlag(ipw_composition_change)
+  assertFlag(cohort_by_cohort)
+
 
   # check that anticipation choice and omitted_event_time choice don't conflict
   if(omitted_event_time + anticipation > -1){
@@ -966,7 +1194,6 @@ bootstrap_ES <- function(long_data, outcomevar, unit_var, cal_time_var, onset_ti
       if(vv %in% design_vars){stop(sprintf("Variable cont_covars='%s' is among %s, which are already controlled in the design.",vv))}
     }
   }
-
 
   # check that user correctly input what to do with never treated
   if(!(never_treat_action %in% c('none', 'exclude', 'keep', 'only'))){
@@ -1037,9 +1264,43 @@ bootstrap_ES <- function(long_data, outcomevar, unit_var, cal_time_var, onset_ti
                            anticipation = anticipation, min_control_gap = min_control_gap, max_control_gap = max_control_gap, omitted_event_time = omitted_event_time,
                            control_subset_var = control_subset_var, control_subset_event_time = control_subset_event_time,
                            treated_subset_var = treated_subset_var, treated_subset_event_time = treated_subset_event_time,
+                           control_subset_var2 = control_subset_var2, control_subset_event_time2 = control_subset_event_time2,
+                           treated_subset_var2 = treated_subset_var2, treated_subset_event_time2 = treated_subset_event_time2,
+                           control_subset_var3 = control_subset_var3, control_subset_event_time3 = control_subset_event_time3,
+                           treated_subset_var3 = treated_subset_var3, treated_subset_event_time3 = treated_subset_event_time3,
+                           control_subset_var4 = control_subset_var4, control_subset_event_time4 = control_subset_event_time4,
+                           treated_subset_var4 = treated_subset_var4, treated_subset_event_time4 = treated_subset_event_time4,
+                           control_subset_var5 = control_subset_var5, control_subset_event_time5 = control_subset_event_time5,
+                           treated_subset_var5 = treated_subset_var5, treated_subset_event_time5 = treated_subset_event_time5,
                            never_treat_action = never_treat_action, never_treat_val = never_treat_val,
                            cluster_vars = NULL, discrete_covars = discrete_covars, cont_covars = cont_covars, reg_weights = reg_weights,
-                           event_vs_noevent = event_vs_noevent, ref_discrete_covars = ref_discrete_covars, ref_cont_covars = ref_cont_covars)
+                           event_vs_noevent = event_vs_noevent, ref_discrete_covars = ref_discrete_covars, ref_cont_covars = ref_cont_covars,
+                           matching_var = matching_var, matching_var_quartile = matching_var_quartile, matching_var_avg = matching_var_avg)
+
+  if((!is.na(restrict_pre)) | (!is.na(restrict_post))){
+
+    # Restrict ES_data to only use observations observed within the 'restrict_pre' to 'restrict_post' event times
+
+    if((!is.na(restrict_pre)) & (!is.na(restrict_post))){
+      ES_data <- ES_data[between(ref_event_time, restrict_pre, restrict_post, incbounds = TRUE)]
+      gc()
+    } else if((!is.na(restrict_pre)) & (is.na(restrict_post))){
+      ES_data <- ES_data[ref_event_time >= restrict_pre]
+      gc()
+    } else if((is.na(restrict_pre)) & (!is.na(restrict_post))){
+      ES_data <- ES_data[ref_event_time <= restrict_post]
+      gc()
+    }
+
+    # But the above will keep all of the omitted_event_time observations even from the excluded CATTs (since that is always the omitted group)
+    # So also want to remove catt_specific_sample cases with only -2
+    ES_data[, max_time := max(ref_event_time), by = list(ref_onset_time, catt_specific_sample)]
+    ES_data[, min_time := min(ref_event_time), by = list(ref_onset_time, catt_specific_sample)]
+    ES_data <- ES_data[max_time != min_time]
+    ES_data[, c("max_time", "min_time") := NULL]
+    gc()
+
+  }
 
   # estimate inverse probability weights, if relevant
   if(ipw == TRUE){
@@ -1096,7 +1357,10 @@ bootstrap_ES <- function(long_data, outcomevar, unit_var, cal_time_var, onset_ti
                                          reg_weights = reg_weights,
                                          ipw = ipw,
                                          ipw_composition_change = ipw_composition_change,
+                                         cohort_by_cohort = cohort_by_cohort,
+                                         num_cores = num_cores,
                                          add_unit_fes = add_unit_fes)[[1]]
+
     setnames(ES_results_hetero,c(onset_time_var,"event_time"),c("ref_onset_time","ref_event_time"))
   } else{
     ES_results_hetero = NULL
@@ -1116,7 +1380,10 @@ bootstrap_ES <- function(long_data, outcomevar, unit_var, cal_time_var, onset_ti
                                      reg_weights = reg_weights,
                                      ipw = ipw,
                                      ipw_composition_change = ipw_composition_change,
+                                     cohort_by_cohort = cohort_by_cohort,
+                                     num_cores = num_cores,
                                      add_unit_fes = add_unit_fes)[[1]]
+
   setnames(ES_results_homo,c(onset_time_var,"event_time"),c("ref_onset_time","ref_event_time"))
 
   # collect count of treated units by each (ref_onset_time, ref_event_time) for V1 of population-weighted ATTs
@@ -1200,5 +1467,30 @@ bootstrap_ES <- function(long_data, outcomevar, unit_var, cal_time_var, onset_ti
   return(figdata)
 }
 
+ES_plot_raw <- function(figdata, cohort_subset = NA, lower_event = -3, upper_event = 5, omitted_event_time = -2){
 
+  # As this function changes the underlying results data and figdata tends to be a small file, make a copy now
+  figdata_temp <- copy(figdata)
+
+  figdata_temp <- figdata_temp[rn %in% c("treatment_means")]
+  figdata_temp[, ref_onset_time :=  as.integer(as.character(ref_onset_time))]
+  figdata_temp[, ref_event_time := as.integer(as.character(ref_event_time))]
+  figdata_temp[treated==1, treatment := "Treatment"]
+  figdata_temp[treated==0, treatment := "Control"]
+  figdata_temp[, treatment := factor(treatment,levels=c("Treatment","Control"))]
+  figdata_temp[, year := ref_onset_time + ref_event_time]
+  figdata_temp <- figdata_temp[ref_event_time >= lower_event & ref_event_time <= upper_event]
+
+  if(!is.na(cohort_subset)){
+    figdata_temp <- figdata_temp[ref_onset_time %in% cohort_subset]
+  }
+
+  gg <- ggplot(aes(x=year,y=estimate,colour=factor(ref_onset_time),linetype=treatment),data=figdata_temp) +
+    geom_line() + geom_point() + geom_vline(aes(xintercept=ref_onset_time,colour=factor(ref_onset_time)),linetype=3) +
+    theme_bw(base_size = 16) + labs(colour="Cohort",linetype="",x="Year") +
+    scale_x_continuous(breaks = pretty_breaks()) + scale_y_continuous(breaks = pretty_breaks())
+
+  return(gg)
+
+}
 

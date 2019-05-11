@@ -16,7 +16,9 @@ ES_estimate_ATT <- function(ES_data,
                             reg_weights = NULL,
                             ipw = FALSE,
                             ipw_composition_change = FALSE,
-                            add_unit_fes = FALSE
+                            add_unit_fes = FALSE,
+                            cohort_by_cohort = FALSE,
+                            num_cores = 1,
                             ) {
 
   onset_times <- sort(unique(ES_data[, .N, by = eval(onset_time_var)][[onset_time_var]]))
@@ -33,48 +35,13 @@ ES_estimate_ATT <- function(ES_data,
     # sample already balanced
     ES_data[, unit_sample := .GRP, by = list(get(onset_time_var), catt_specific_sample, ref_onset_time)]
   }
+
   if(!(is.null(cluster_vars))){
     ES_data[, cluster_on_this := .GRP, by = cluster_vars]
     cluster_on_this <- "cluster_on_this"
   } else{
       # White / robust SEs
       cluster_on_this <- 0
-  }
-
-  if(residualize_covariates == FALSE & ipw == FALSE){
-
-    if((!is.null(discrete_covars)) | (!is.null(ref_discrete_covars)) ){
-
-      # For felm(), want to tell which factor combination will be sent to the intercept
-      # Let's set it to the (approximate) median
-
-      i <- 0
-      reference_lookup <- list()
-      discrete_covar_formula_input <- c()
-      for(var in unique(na.omit(c(discrete_covars, ref_discrete_covars)))){
-        i <- i + 1
-        levels <- sort(ES_data[, unique(get(var))])
-        median_pre_value <- levels[round(length(levels)/2)] # approximate median
-        reference_lookup[[i]] <- data.table(varname = var, reference_level = as.character(median_pre_value))
-
-        discrete_covar_formula_input <- c(discrete_covar_formula_input,
-                                          sprintf("relevel(as.factor(%s), ref = '%s')", var, median_pre_value))
-
-        var <- NULL
-        median_pre_value <- NULL
-      }
-      reference_lookup <- rbindlist(reference_lookup, use.names = TRUE)
-
-    } else{
-      discrete_covar_formula_input = NA
-    }
-
-    if((!is.null(cont_covars)) | (!is.null(ref_cont_covars))){
-      cont_covar_formula_input = paste0(unique(na.omit(c(cont_covars, ref_cont_covars))), collapse = "+")
-    } else{
-      cont_covar_formula_input = NA
-    }
-
   }
 
   if(ipw == TRUE){
@@ -105,112 +72,357 @@ ES_estimate_ATT <- function(ES_data,
 
   if (homogeneous_ATT == FALSE) {
 
-    for (h in intersect((min(ES_data$ref_onset_time):max(ES_data$ref_onset_time)), ref_onset_times)) {
-      for (r in setdiff(min(ES_data[ref_onset_time == h]$ref_event_time):max(ES_data[ref_onset_time == h]$ref_event_time), omitted_event_time)) {
-        var <- sprintf("ref_onset_time%s_catt%s", h, r)
-        ES_data[, (var) := as.integer(ref_onset_time == h & ref_event_time == r & get(onset_time_var) == h)]
-      }
-    }
+    if(cohort_by_cohort == FALSE){
 
-    new_cols <- setdiff(colnames(ES_data), start_cols)
-    new_cols_used <- gsub("\\-", "lead", new_cols) # "-" wreaks havoc otherwise, syntactically
-    setnames(ES_data, new_cols, new_cols_used)
-
-    # Should now be able to combine all of the above in a natural way
-    felm_formula_input <- paste(new_cols_used, collapse = "+")
-
-    if(ipw == TRUE){
-
-      if(!(is.null(reg_weights))){
-        ES_data[pr_subset == 1, pw := pw * get(reg_weights)]
+      for (h in intersect((min(ES_data$ref_onset_time):max(ES_data$ref_onset_time)), ref_onset_times)) {
+        for (r in setdiff(min(ES_data[ref_onset_time == h]$ref_event_time):max(ES_data[ref_onset_time == h]$ref_event_time), omitted_event_time)) {
+          var <- sprintf("ref_onset_time%s_catt%s", h, r)
+          ES_data[, (var) := as.integer(ref_onset_time == h & ref_event_time == r & get(onset_time_var) == h)]
+        }
       }
 
-      est <- felm(as.formula(paste0(eval(outcomevar), " ~ ", felm_formula_input, " | unit_sample + ref_onset_ref_event_time | 0 | ",  cluster_on_this)),
-                  data = ES_data[pr_subset == 1], weights = ES_data[pr_subset == 1]$pw,
-                  nostats = FALSE, keepX = FALSE, keepCX = FALSE, psdef = FALSE, kclass = FALSE
-      )
+      new_cols <- setdiff(colnames(ES_data), start_cols)
+      new_cols_used <- gsub("\\-", "lead", new_cols) # "-" wreaks havoc otherwise, syntactically
+      setnames(ES_data, new_cols, new_cols_used)
 
-      unique_units <- ES_data[pr_subset == 1 & !is.na(pw), uniqueN(get(unit_var), na.rm = TRUE)]
+      # Should now be able to combine all of the above in a natural way
+      felm_formula_input <- paste(new_cols_used, collapse = "+")
+
+      if(ipw == TRUE & residualize_covariates == FALSE){
+
+        if(!(is.null(reg_weights))){
+          ES_data[pr_subset == 1, pw := pw * get(reg_weights)]
+        }
+
+        est <- felm(as.formula(paste0(eval(outcomevar), " ~ ", felm_formula_input, " | unit_sample + ref_onset_ref_event_time | 0 | ",  cluster_on_this)),
+                    data = ES_data[pr_subset == 1], weights = ES_data[pr_subset == 1]$pw,
+                    nostats = FALSE, keepX = FALSE, keepCX = FALSE, psdef = FALSE, kclass = FALSE
+        )
+
+        unique_units <- ES_data[pr_subset == 1 & !is.na(pw), uniqueN(get(unit_var), na.rm = TRUE)]
+        gc()
+
+      } else if(ipw == FALSE & residualize_covariates == TRUE){
+
+        if(!(is.null(reg_weights))){
+          est <- felm(as.formula(paste0(eval(outcomevar), " ~ ", felm_formula_input, " | unit_sample + ref_onset_ref_event_time | 0 | ",  cluster_on_this)),
+                      data = ES_data, weights = ES_data[[reg_weights]],
+                      nostats = FALSE, keepX = FALSE, keepCX = FALSE, psdef = FALSE, kclass = FALSE
+          )
+
+          unique_units <- ES_data[!is.na(reg_weights), uniqueN(get(unit_var), na.rm = TRUE)]
+          gc()
+
+        } else{
+          est <- felm(as.formula(paste0(eval(outcomevar), " ~ ", felm_formula_input, " | unit_sample + ref_onset_ref_event_time | 0 | ",  cluster_on_this)),
+                      data = ES_data,
+                      nostats = FALSE, keepX = FALSE, keepCX = FALSE, psdef = FALSE, kclass = FALSE
+          )
+
+          unique_units <- ES_data[, uniqueN(get(unit_var), na.rm = TRUE)]
+          gc()
+        }
+
+      } else if(residualize_covariates == FALSE & ipw == FALSE){
+
+        # Case where covariates are passed to final regression, if present
+
+        if((!is.null(discrete_covars)) | (!is.null(ref_discrete_covars)) ){
+
+          # For felm(), want to tell which factor combination will be sent to the intercept
+          # Let's set it to the median
+
+          i <- 0
+          reference_lookup <- list()
+          discrete_covar_formula_input <- c()
+          for(var in unique(na.omit(c(discrete_covars, ref_discrete_covars)))){
+            i <- i + 1
+            levels <- sort(unique(ES_data[[var]]))
+            median_pre_value <- levels[round(length(levels)/2)] # omits the approximate median
+            print(median_pre_value)
+            reference_lookup[[i]] <- data.table(varname = var, reference_level = as.character(median_pre_value))
+
+            discrete_covar_formula_input <- c(discrete_covar_formula_input,
+                                              sprintf("relevel(as.factor(%s), ref = '%s')", var, median_pre_value))
+
+            var <- NULL
+            median_pre_value <- NULL
+          }
+          reference_lookup <- rbindlist(reference_lookup, use.names = TRUE)
+
+        } else{
+          discrete_covar_formula_input = NA
+        }
+
+        if((!is.null(cont_covars)) | (!is.null(ref_cont_covars))){
+          cont_covar_formula_input = paste0(unique(na.omit(c(cont_covars, ref_cont_covars))), collapse = "+")
+        } else{
+          cont_covar_formula_input = NA
+        }
+
+        felm_formula_input = paste(na.omit(c(felm_formula_input, cont_covar_formula_input)), collapse = " + ")
+        fe_formula = paste(na.omit(c("unit_sample + ref_onset_ref_event_time", discrete_covar_formula_input)), collapse = " + ")
+
+        if(!(is.null(reg_weights))){
+          est <- felm(as.formula(paste0(eval(outcomevar), " ~ ", felm_formula_input, " | ", fe_formula," | 0 | ",  cluster_on_this)),
+                      data = ES_data, weights = ES_data[[reg_weights]],
+                      nostats = FALSE, keepX = FALSE, keepCX = FALSE, psdef = FALSE, kclass = FALSE
+          )
+
+          unique_units <- ES_data[!is.na(reg_weights), uniqueN(get(unit_var), na.rm = TRUE)]
+          gc()
+
+        } else{
+          est <- felm(as.formula(paste0(eval(outcomevar), " ~ ", felm_formula_input, " | ", fe_formula," | 0 | ",  cluster_on_this)),
+                      data = ES_data,
+                      nostats = FALSE, keepX = FALSE, keepCX = FALSE, psdef = FALSE, kclass = FALSE
+          )
+
+          unique_units <- ES_data[, uniqueN(get(unit_var), na.rm = TRUE)]
+          gc()
+        }
+      }
+
+      # Grabbing the estimates and vcov to produce weighted avg SEs
+      # Note: vcov already reflects weights used in estimation
+      catt_coefs <- coef(est)
+      if(!(is.null(cluster_vars))){
+        catt_vcov <- est$clustervcv
+      } else{
+        catt_vcov <- est$robustvcv
+      }
+
+      if(!(is.null(cluster_vars))){
+        results <- data.table(rn = rownames(est$beta), estimate = as.vector(est$beta), cluster_se = est$cse, t = est$ctval, pval = est$cpval)
+      } else{
+        results <- data.table(rn = rownames(est$beta), estimate = as.vector(est$beta), cluster_se = est$rse, t = est$rtval, pval = est$rpval)
+      }
+
+      results[, reg_sample_size := est$N]
+      results[, reg_unique_units := unique_units]
+      est <- NULL
       gc()
+      results[!grepl("ref\\_onset\\_time", rn), e := min_onset_time]
+      results[, rn := gsub("lead", "-", rn)]
+      for (c in min_onset_time:max_onset_time) {
+        results[grepl(sprintf("ref\\_onset\\_time%s", c), rn), e := c]
+        results[grepl(sprintf("ref\\_onset\\_time%s", c), rn), rn := gsub(sprintf("ref\\_onset\\_time%s\\_et", c), "et", rn)]
+        results[grepl(sprintf("ref\\_onset\\_time%s", c), rn), rn := gsub(sprintf("ref\\_onset\\_time%s\\_catt", c), "catt", rn)]
+      }
+      results[grepl("et", rn), event_time := as.integer(gsub("et", "", rn))]
+      results[grepl("catt", rn), event_time := as.integer(gsub("catt", "", rn))]
+      results[grepl("et", rn), rn := "event_time"]
+      results[grepl("catt", rn), rn := "catt"]
+      results <- results[rn == "catt"]
+    } else{
 
-    } else if(residualize_covariates == TRUE){
+      # With data resulting in a large ES_data, running all CATTs at once requires lots of memory for all the required dummies
+      # Can instead run cohort-by-cohort; will produce identical estimates (if no added controls), but may impact clustered SEs
 
-      if(!(is.null(reg_weights))){
-        est <- felm(as.formula(paste0(eval(outcomevar), " ~ ", felm_formula_input, " | unit_sample + ref_onset_ref_event_time | 0 | ",  cluster_on_this)),
-                    data = ES_data, weights = ES_data[[reg_weights]],
-                    nostats = FALSE, keepX = FALSE, keepCX = FALSE, psdef = FALSE, kclass = FALSE
-        )
+      ES_cohort_spec_regs <- function(cohort){
 
-        unique_units <- ES_data[!is.na(reg_weights), uniqueN(get(unit_var), na.rm = TRUE)]
+        print(cohort)
+
+        cohort_dt <- ES_data[ref_onset_time == cohort]
         gc()
 
-      } else{
-        est <- felm(as.formula(paste0(eval(outcomevar), " ~ ", felm_formula_input, " | unit_sample + ref_onset_ref_event_time | 0 | ",  cluster_on_this)),
-                    data = ES_data,
-                    nostats = FALSE, keepX = FALSE, keepCX = FALSE, psdef = FALSE, kclass = FALSE
-        )
+        for (r in setdiff(min(cohort_dt$ref_event_time):max(cohort_dt$ref_event_time), omitted_event_time)) {
+          var <- sprintf("ref_onset_time%s_catt%s", cohort, r)
+          cohort_dt[, (var) := as.integer(ref_event_time == r & get(onset_time_var) == cohort)]
+        }
 
-        unique_units <- ES_data[, uniqueN(get(unit_var), na.rm = TRUE)]
+        new_cols <- setdiff(colnames(cohort_dt), start_cols)
+        new_cols_used <- gsub("\\-", "lead", new_cols) # "-" wreaks havoc otherwise, syntactically
+        setnames(cohort_dt, new_cols, new_cols_used)
+
+        # Should now be able to combine all of the above in a natural way
+        felm_formula_input <- paste(new_cols_used, collapse = "+")
+
+        if(ipw == TRUE & residualize_covariates == FALSE){
+
+          if(!(is.null(reg_weights))){
+            cohort_dt[pr_subset == 1, pw := pw * get(reg_weights)]
+          }
+
+          est <- felm(as.formula(paste0(eval(outcomevar), " ~ ", felm_formula_input, " | unit_sample + ref_onset_ref_event_time | 0 | ",  cluster_on_this)),
+                      data = cohort_dt[pr_subset == 1], weights = cohort_dt[pr_subset == 1]$pw,
+                      nostats = FALSE, keepX = FALSE, keepCX = FALSE, psdef = FALSE, kclass = FALSE
+          )
+
+          unique_units <- ES_data[pr_subset == 1 & !is.na(pw), uniqueN(get(unit_var), na.rm = TRUE)]
+          unique_units_cs <- cohort_dt[pr_subset == 1 & !is.na(pw), uniqueN(get(unit_var), na.rm = TRUE)]
+          gc()
+
+        } else if(ipw == FALSE & residualize_covariates == TRUE){
+
+          if(!(is.null(reg_weights))){
+            est <- felm(as.formula(paste0(eval(outcomevar), " ~ ", felm_formula_input, " | unit_sample + ref_onset_ref_event_time | 0 | ",  cluster_on_this)),
+                        data = cohort_dt, weights = cohort_dt[[reg_weights]],
+                        nostats = FALSE, keepX = FALSE, keepCX = FALSE, psdef = FALSE, kclass = FALSE
+            )
+
+            unique_units <- ES_data[!is.na(reg_weights), uniqueN(get(unit_var), na.rm = TRUE)]
+            unique_units_cs <- cohort_dt[!is.na(reg_weights), uniqueN(get(unit_var), na.rm = TRUE)]
+            gc()
+
+          } else{
+            est <- felm(as.formula(paste0(eval(outcomevar), " ~ ", felm_formula_input, " | unit_sample + ref_onset_ref_event_time | 0 | ",  cluster_on_this)),
+                        data = cohort_dt,
+                        nostats = FALSE, keepX = FALSE, keepCX = FALSE, psdef = FALSE, kclass = FALSE
+            )
+
+            unique_units <- ES_data[, uniqueN(get(unit_var), na.rm = TRUE)]
+            unique_units_cs <- cohort_dt[, uniqueN(get(unit_var), na.rm = TRUE)]
+            gc()
+          }
+
+        } else if(residualize_covariates == FALSE & ipw == FALSE){
+
+            # For felm(), want to tell which factor combination will be sent to the intercept
+            # Let's set it to the median
+
+          if((!is.null(discrete_covars)) | (!is.null(ref_discrete_covars)) ){
+
+            # For felm(), want to tell which factor combination will be sent to the intercept
+            # Will prefer choosing levels that are present in all cohorts, and then fallback on an available level in the cohort
+
+            list_unique <- function(cohort, var){return(sort(unique(ES_data[ref_onset_time == cohort][[var]])))}
+
+            i <- 0
+            reference_lookup <- list()
+            discrete_covar_formula_input <- c()
+            for(var in unique(na.omit(c(discrete_covars, ref_discrete_covars)))){
+              i <- i + 1
+              unique_val_list <- lapply(ref_onset_times, list_unique, var = var)
+              common_levels <- sort(Reduce(intersect, unique_val_list))
+              if(length(common_levels) > 0){
+                ref_level = common_levels[round(length(common_levels)/2)] # omits the approximate median
+              } else{
+                cohort_specific_levels <- sort(unique(ES_data[ref_onset_time == cohort][[var]]))
+                ref_level = cohort_specific_levels[round(length(cohort_specific_levels)/2)]
+              }
+              print(c(var, ref_level))
+              reference_lookup[[i]] <- data.table(varname = var, reference_level = as.character(ref_level))
+
+              discrete_covar_formula_input <- c(discrete_covar_formula_input,
+                                                sprintf("relevel(as.factor(%s), ref = '%s')", var, ref_level))
+
+              var <- NULL
+              ref_level <- NULL
+            }
+            reference_lookup <- rbindlist(reference_lookup, use.names = TRUE)
+
+          } else{
+            discrete_covar_formula_input = NA
+          }
+
+          if((!is.null(cont_covars)) | (!is.null(ref_cont_covars))){
+            cont_covar_formula_input = paste0(unique(na.omit(c(cont_covars, ref_cont_covars))), collapse = "+")
+          } else{
+            cont_covar_formula_input = NA
+          }
+
+          felm_formula_input = paste(na.omit(c(felm_formula_input, cont_covar_formula_input)), collapse = " + ")
+          fe_formula = paste(na.omit(c("unit_sample + ref_onset_ref_event_time", discrete_covar_formula_input)), collapse = " + ")
+
+          if(!(is.null(reg_weights))){
+            est <- felm(as.formula(paste0(eval(outcomevar), " ~ ", felm_formula_input, " | ", fe_formula," | 0 | ",  cluster_on_this)),
+                        data = cohort_dt, weights = cohort_dt[[reg_weights]],
+                        nostats = FALSE, keepX = FALSE, keepCX = FALSE, psdef = FALSE, kclass = FALSE
+            )
+
+            unique_units <- ES_data[!is.na(reg_weights), uniqueN(get(unit_var), na.rm = TRUE)]
+            unique_units_cs <- cohort_dt[!is.na(reg_weights), uniqueN(get(unit_var), na.rm = TRUE)]
+            gc()
+
+          } else{
+            est <- felm(as.formula(paste0(eval(outcomevar), " ~ ", felm_formula_input, " | ", fe_formula," | 0 | ",  cluster_on_this)),
+                        data = cohort_dt,
+                        nostats = FALSE, keepX = FALSE, keepCX = FALSE, psdef = FALSE, kclass = FALSE
+            )
+
+            unique_units <- ES_data[, uniqueN(get(unit_var), na.rm = TRUE)]
+            unique_units_cs <- cohort_dt[, uniqueN(get(unit_var), na.rm = TRUE)]
+            gc()
+          }
+        }
+
+        cohort_dt <- NULL
         gc()
+
+        # Grabbing the estimates and vcov to produce weighted avg SEs
+        catt_coefs <- coef(est)
+        if(!(is.null(cluster_vars))){
+          catt_vcov <- est$clustervcv
+        } else{
+          catt_vcov <- est$robustvcv
+        }
+
+        if(!(is.null(cluster_vars))){
+          catt_results <- data.table(rn = rownames(est$beta), estimate = as.vector(est$beta), cluster_se = est$cse, t = est$ctval, pval = est$cpval)
+        } else{
+          catt_results <- data.table(rn = rownames(est$beta), estimate = as.vector(est$beta), cluster_se = est$rse, t = est$rtval, pval = est$rpval)
+        }
+
+        catt_results[, reg_sample_size := est$N]
+        catt_results[, reg_unique_units := unique_units]
+        catt_results[, reg_unique_units_cs := unique_units_cs]
+        est <- NULL
+        gc()
+        catt_results[!grepl("ref\\_onset\\_time", rn), e := min_onset_time]
+        catt_results[, rn := gsub("lead", "-", rn)]
+        for (c in min_onset_time:(max_onset_time - 1)) {
+          catt_results[grepl(sprintf("ref\\_onset\\_time%s", c), rn), e := c]
+          catt_results[grepl(sprintf("ref\\_onset\\_time%s", c), rn), rn := gsub(sprintf("ref\\_onset\\_time%s\\_et", c), "et", rn)]
+          catt_results[grepl(sprintf("ref\\_onset\\_time%s", c), rn), rn := gsub(sprintf("ref\\_onset\\_time%s\\_catt", c), "catt", rn)]
+        }
+        catt_results[grepl("et", rn), event_time := as.integer(gsub("et", "", rn))]
+        catt_results[grepl("catt", rn), event_time := as.integer(gsub("catt", "", rn))]
+        catt_results[grepl("et", rn), rn := "event_time"]
+        catt_results[grepl("catt", rn), rn := "catt"]
+        catt_results <- catt_results[rn == "catt"]
+
+        catt_output <- list()
+        catt_output[[1]] <- catt_results
+        catt_output[[2]] <- catt_coefs
+        catt_output[[3]] <- catt_vcov
+
+        return(catt_output)
       }
 
-    } else{
+      all_results <- mclapply(X = ref_onset_times, FUN = ES_cohort_spec_regs, mc.silent = FALSE, mc.cores = num_cores, mc.set.seed = TRUE)
 
-      felm_formula_input = paste(na.omit(c(felm_formula_input, cont_covar_formula_input)), collapse = " + ")
-      fe_formula = paste(na.omit(c("unit_sample + ref_onset_ref_event_time", discrete_covar_formula_input)), collapse = " + ")
+      # Now need to unravel 'results' into:
+      # 1) a data.table with the estimates/current SEs
+      # 2) a named vector with just the estimates (catt_coefs-type thing)
+      # 3) a catt_vcov type thing appropriately matching the order of 2) above
 
-      if(!(is.null(reg_weights))){
-        est <- felm(as.formula(paste0(eval(outcomevar), " ~ ", felm_formula_input, " | ", fe_formula," | 0 | ",  cluster_on_this)),
-                    data = ES_data, weights = ES_data[[reg_weights]],
-                    nostats = FALSE, keepX = FALSE, keepCX = FALSE, psdef = FALSE, kclass = FALSE
-        )
+      results = list()
+      catt_coefs = c()
+      catt_vcov = list()
+      catt_vcov_dimnames1 = c()
+      catt_vcov_dimnames2 = c()
 
-        unique_units <- ES_data[!is.na(reg_weights), uniqueN(get(unit_var), na.rm = TRUE)]
-        gc()
+      for(i in 1:length(all_results)){
 
-      } else{
-        est <- felm(as.formula(paste0(eval(outcomevar), " ~ ", felm_formula_input, " | ", fe_formula," | 0 | ",  cluster_on_this)),
-                    data = ES_data,
-                    nostats = FALSE, keepX = FALSE, keepCX = FALSE, psdef = FALSE, kclass = FALSE
-        )
+        results[[i]] <- all_results[[i]][[1]]
+        catt_coefs <- c(catt_coefs, all_results[[i]][[2]])
 
-        unique_units <- ES_data[, uniqueN(get(unit_var), na.rm = TRUE)]
-        gc()
+        catt_vcov[[i]] <- all_results[[i]][[3]]
+        catt_vcov_dimnames1 <- c(catt_vcov_dimnames1, dimnames(all_results[[i]][[3]])[[1]])
+        catt_vcov_dimnames2 <- c(catt_vcov_dimnames2, dimnames(all_results[[i]][[3]])[[2]])
 
       }
+
+      results <- rbindlist(results, use.names = TRUE)
+
+      # Note: below just build block diagonal, which assumes independence across cohort-specific estimates
+      # TO DO: estimate covariance
+      catt_vcov <- as.matrix(bdiag(catt_vcov))
+      dimnames(catt_vcov)[[1]] <- catt_vcov_dimnames1
+      dimnames(catt_vcov)[[2]] <- catt_vcov_dimnames2
     }
 
-    # Grabbing the estimates and vcov to produce weighted avg SEs
-    # Note: vcov already reflects weights used in estimation
-    catt_coefs <- coef(est)
-    if(!(is.null(cluster_vars))){
-      catt_vcov <- est$clustervcv
-    } else{
-      catt_vcov <- est$robustvcv
-    }
-
-    if(!(is.null(cluster_vars))){
-      results <- data.table(rn = rownames(est$beta), estimate = as.vector(est$beta), cluster_se = est$cse, t = est$ctval, pval = est$cpval)
-    } else{
-      results <- data.table(rn = rownames(est$beta), estimate = as.vector(est$beta), cluster_se = est$rse, t = est$rtval, pval = est$rpval)
-    }
-
-    results[, reg_sample_size := est$N]
-    results[, reg_unique_units := unique_units]
-    est <- NULL
-    gc()
-    results[!grepl("ref\\_onset\\_time", rn), e := min_onset_time]
-    results[, rn := gsub("lead", "-", rn)]
-    for (c in min_onset_time:max_onset_time) {
-      results[grepl(sprintf("ref\\_onset\\_time%s", c), rn), e := c]
-      results[grepl(sprintf("ref\\_onset\\_time%s", c), rn), rn := gsub(sprintf("ref\\_onset\\_time%s\\_et", c), "et", rn)]
-      results[grepl(sprintf("ref\\_onset\\_time%s", c), rn), rn := gsub(sprintf("ref\\_onset\\_time%s\\_catt", c), "catt", rn)]
-    }
-    results[grepl("et", rn), event_time := as.integer(gsub("et", "", rn))]
-    results[grepl("catt", rn), event_time := as.integer(gsub("catt", "", rn))]
-    results[grepl("et", rn), rn := "event_time"]
-    results[grepl("catt", rn), rn := "catt"]
-    results <- results[rn == "catt"]
   } else {
 
     for (r in setdiff(min(ES_data$ref_event_time):max(ES_data$ref_event_time), omitted_event_time)) {
@@ -225,7 +437,7 @@ ES_estimate_ATT <- function(ES_data,
     # Should now be able to combine all of the above in a natural way
     felm_formula_input <- paste(c(new_cols_used), collapse = "+")
 
-    if(ipw == TRUE){
+    if(ipw == TRUE & residualize_covariates == FALSE){
 
       if(!(is.null(reg_weights))){
         ES_data[pr_subset == 1, pw := pw * get(reg_weights)]
@@ -239,7 +451,7 @@ ES_estimate_ATT <- function(ES_data,
       unique_units <- ES_data[pr_subset == 1 & !is.na(pw), uniqueN(get(unit_var), na.rm = TRUE)]
       gc()
 
-    } else if(residualize_covariates == TRUE){
+    } else if(ipw == FALSE & residualize_covariates == TRUE){
 
       if(!(is.null(reg_weights))){
         est <- felm(as.formula(paste0(eval(outcomevar), " ~ ", felm_formula_input, " | unit_sample + ref_onset_ref_event_time | 0 | ",  cluster_on_this)),
@@ -249,7 +461,6 @@ ES_estimate_ATT <- function(ES_data,
 
         unique_units <- ES_data[!is.na(reg_weights), uniqueN(get(unit_var), na.rm = TRUE)]
         gc()
-
 
       } else{
         est <- felm(as.formula(paste0(eval(outcomevar), " ~ ", felm_formula_input, " | unit_sample + ref_onset_ref_event_time | 0 | ",  cluster_on_this)),
@@ -262,7 +473,42 @@ ES_estimate_ATT <- function(ES_data,
 
       }
 
-    } else{
+    } else if(ipw == FALSE & residualize_covariates == FALSE){
+
+      # Case where covariates are passed to final regression, if relevant
+
+      if((!is.null(discrete_covars)) | (!is.null(ref_discrete_covars)) ){
+
+        # For felm(), want to tell which factor combination will be sent to the intercept
+        # Let's set it to the median
+
+        i <- 0
+        reference_lookup <- list()
+        discrete_covar_formula_input <- c()
+        for(var in unique(na.omit(c(discrete_covars, ref_discrete_covars)))){
+          i <- i + 1
+          levels <- sort(unique(ES_data[[var]]))
+          median_pre_value <- levels[round(length(levels)/2)] # omits the approximate median
+          print(median_pre_value)
+          reference_lookup[[i]] <- data.table(varname = var, reference_level = as.character(median_pre_value))
+
+          discrete_covar_formula_input <- c(discrete_covar_formula_input,
+                                            sprintf("relevel(as.factor(%s), ref = '%s')", var, median_pre_value))
+
+          var <- NULL
+          median_pre_value <- NULL
+        }
+        reference_lookup <- rbindlist(reference_lookup, use.names = TRUE)
+
+      } else{
+        discrete_covar_formula_input = NA
+      }
+
+      if((!is.null(cont_covars)) | (!is.null(ref_cont_covars))){
+        cont_covar_formula_input = paste0(unique(na.omit(c(cont_covars, ref_cont_covars))), collapse = "+")
+      } else{
+        cont_covar_formula_input = NA
+      }
 
       felm_formula_input = paste(na.omit(c(felm_formula_input, cont_covar_formula_input)), collapse = " + ")
       fe_formula = paste(na.omit(c("unit_sample + ref_onset_ref_event_time", discrete_covar_formula_input)), collapse = " + ")
@@ -309,6 +555,7 @@ ES_estimate_ATT <- function(ES_data,
     results[, event_time := as.integer(gsub("att", "", rn))]
     results[, rn := "att"]
   }
+  
   setnames(results, c("e"), onset_time_var)
   results[, pval := round(pval,8)]
 

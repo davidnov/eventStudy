@@ -21,6 +21,26 @@ ES_clean_data <- function(long_data,
                           never_treat_action = 'none',
                           never_treat_val = NA,
                           reg_weights = NULL,
+                          matching_var = NULL,
+                          matching_var_quartile = NA,
+                          matching_var_avg = FALSE,
+                          pass_var = NULL,
+                          treated_subset_var2=NA,
+                          treated_subset_event_time2=NA,
+                          control_subset_var2=NA,
+                          control_subset_event_time2=NA,
+                          treated_subset_var3=NA,
+                          treated_subset_event_time3=NA,
+                          control_subset_var3=NA,
+                          control_subset_event_time3=NA,
+                          treated_subset_var4=NA,
+                          treated_subset_event_time4=NA,
+                          control_subset_var4=NA,
+                          control_subset_event_time4=NA,
+                          treated_subset_var5=NA,
+                          treated_subset_event_time5=NA,
+                          control_subset_var5=NA,
+                          control_subset_event_time5=NA,
                           event_vs_noevent = FALSE) {
 
   # Restriction based on supplied omitted_event_time
@@ -82,7 +102,7 @@ ES_clean_data <- function(long_data,
       possible_treated_control <- list()
 
       possible_treated_control[[1]] <- long_data[relevant_subset == 1 & get(onset_time_var) == event_cohort,
-                                                 unique(na.omit(c(outcomevar, unit_var, cal_time_var, onset_time_var, treated_subset_var, control_subset_var, cluster_vars, discrete_covars, cont_covars, reg_weights, ref_discrete_covars, ref_cont_covars))),
+                                                 unique(na.omit(c(outcomevar, unit_var, cal_time_var, onset_time_var, treated_subset_var, control_subset_var, treated_subset_var2, control_subset_var2, treated_subset_var3, control_subset_var3, treated_subset_var4, control_subset_var4, treated_subset_var5, control_subset_var5, cluster_vars, discrete_covars, cont_covars, reg_weights, ref_discrete_covars, ref_cont_covars, matching_var, pass_var))),
                                                  with = FALSE
                                                  ]
       gc()
@@ -90,7 +110,7 @@ ES_clean_data <- function(long_data,
       possible_treated_control[[1]][, treated := 1]
 
       possible_treated_control[[2]] <- long_data[relevant_subset == 1 & between(get(onset_time_var), event_cohort + min_control_gap, event_cohort + max_control_gap, incbounds = TRUE),
-                                                 unique(na.omit(c(outcomevar, unit_var, cal_time_var, onset_time_var, treated_subset_var, control_subset_var, cluster_vars, discrete_covars, cont_covars, reg_weights, ref_discrete_covars, ref_cont_covars))),
+                                                 unique(na.omit(c(outcomevar, unit_var, cal_time_var, onset_time_var, treated_subset_var, control_subset_var, treated_subset_var2, control_subset_var2, treated_subset_var3, control_subset_var3, treated_subset_var4, control_subset_var4, treated_subset_var5, control_subset_var5, cluster_vars, discrete_covars, cont_covars, reg_weights, ref_discrete_covars, ref_cont_covars, matching_var, pass_var))),
                                                  with = FALSE
                                                  ]
 
@@ -142,6 +162,20 @@ ES_clean_data <- function(long_data,
       temp <- NULL
       gc()
 
+      if(!(is.null(matching_var)) & matching_var_avg == TRUE){
+
+        # Will be using the three-year mean of matching_var instead of just omitted_event_time
+        possible_treated_control[, avg_matching_var :=
+                                   (max((ref_event_time == -3)*get(matching_var)) +
+                                   max((ref_event_time == -2)*get(matching_var)) +
+                                   max((ref_event_time == -1)*get(matching_var)))/3, by = list(get(unit_var))]
+
+        possible_treated_control[, (matching_var) := avg_matching_var]
+        possible_treated_control[, avg_matching_var := NULL]
+        gc()
+
+      }
+
       for (time_since_event in setdiff(years, omitted_event_time)) { # excluding focal cohort's omitted_event_time -- recall, panel such that all cohorts have omitted_event_time
 
         i <- i + 1
@@ -164,6 +198,32 @@ ES_clean_data <- function(long_data,
         gc()
         balanced_treated_control[[i]][, catt_specific_sample := i]
 
+        if(!(is.null(matching_var))){
+
+          q = quantile(balanced_treated_control[[i]][treated == 1 & ref_event_time == omitted_event_time][[matching_var]],
+                       probs = c(0.25, 0.5, 0.75)
+          )
+          gc()
+
+          balanced_treated_control[[i]][, relevant_level := max(get(matching_var) * (ref_event_time == omitted_event_time)), by = list(get(unit_var))]
+
+          balanced_treated_control[[i]][relevant_level > q[3], catt_quartile := 4]
+          balanced_treated_control[[i]][relevant_level <= q[3], catt_quartile := 3]
+          balanced_treated_control[[i]][relevant_level <= q[2], catt_quartile := 2]
+          balanced_treated_control[[i]][relevant_level <= q[1], catt_quartile := 1]
+          balanced_treated_control[[i]][, relevant_level := NULL]
+
+          if(!(is.na(matching_var_quartile))){
+            balanced_treated_control[[i]] <- balanced_treated_control[[i]][catt_quartile == matching_var_quartile]
+            balanced_treated_control[[i]][, catt_quartile := NULL]
+          }
+
+          print(q)
+          rm(q)
+          gc()
+
+        }
+
       }
 
       possible_treated_control <- NULL
@@ -176,7 +236,7 @@ ES_clean_data <- function(long_data,
       balanced_treated_control <- na.omit(balanced_treated_control)
       gc()
 
-      stack_across_cohorts_balanced_treated_control[[j]] <- balanced_treated_control[, unique(na.omit(c(outcomevar, unit_var, cal_time_var, onset_time_var, treated_subset_var, control_subset_var, cluster_vars, discrete_covars, cont_covars, reg_weights, ref_discrete_covars, ref_cont_covars, "ref_onset_time", "ref_event_time", "catt_specific_sample", "treated"))), with = FALSE]
+      stack_across_cohorts_balanced_treated_control[[j]] <- balanced_treated_control[, unique(na.omit(c(outcomevar, unit_var, cal_time_var, onset_time_var, treated_subset_var, control_subset_var, treated_subset_var2, control_subset_var2, treated_subset_var3, control_subset_var3, treated_subset_var4, control_subset_var4, treated_subset_var5, control_subset_var5, cluster_vars, discrete_covars, cont_covars, reg_weights, ref_discrete_covars, ref_cont_covars , matching_var, pass_var, "ref_onset_time", "ref_event_time", "catt_specific_sample", "treated"))), with = FALSE]
       gc()
 
       balanced_treated_control <- NULL
@@ -208,6 +268,100 @@ ES_clean_data <- function(long_data,
   if(!is.na(control_subset_var) & !is.na(treated_subset_var)){
     stack_across_cohorts_balanced_treated_control[, valid_treated_group := max(as.integer(get(treated_subset_var)*(ref_event_time==treated_subset_event_time))), by=c(unit_var, "ref_onset_time")]
     stack_across_cohorts_balanced_treated_control[, valid_control_group := max(as.integer(get(control_subset_var)*(ref_event_time==control_subset_event_time))), by=c(unit_var, "ref_onset_time")]
+    stack_across_cohorts_balanced_treated_control <- stack_across_cohorts_balanced_treated_control[(treated==0 & valid_control_group==1)  | (treated==1 & valid_treated_group==1) ]
+    stack_across_cohorts_balanced_treated_control[, c("valid_treated_group", "valid_control_group") := NULL] # these variables are no longer needed
+    gc()
+  }
+
+  # Adding potential subsetting variables based on a different ref_event_time
+
+  if(!is.na(treated_subset_var2) & is.na(control_subset_var2)){
+    stack_across_cohorts_balanced_treated_control[, valid_treated_group := max(as.integer(get(treated_subset_var2)*(ref_event_time==treated_subset_event_time2))), by=c(unit_var, "ref_onset_time")]
+    stack_across_cohorts_balanced_treated_control <- stack_across_cohorts_balanced_treated_control[treated==0 | valid_treated_group==1]
+    stack_across_cohorts_balanced_treated_control[, valid_treated_group := NULL] # this variable is no longer needed
+    gc()
+  }
+
+  if(!is.na(control_subset_var2) & is.na(treated_subset_var2)){
+    stack_across_cohorts_balanced_treated_control[, valid_control_group := max(as.integer(get(control_subset_var2)*(ref_event_time==control_subset_event_time2))), by=c(unit_var, "ref_onset_time")]
+    stack_across_cohorts_balanced_treated_control <- stack_across_cohorts_balanced_treated_control[valid_control_group==1  | treated==1 ]
+    stack_across_cohorts_balanced_treated_control[, valid_control_group := NULL] # this variable is no longer needed
+
+    gc()
+  }
+
+  if(!is.na(control_subset_var2) & !is.na(treated_subset_var2)){
+    stack_across_cohorts_balanced_treated_control[, valid_treated_group := max(as.integer(get(treated_subset_var2)*(ref_event_time==treated_subset_event_time2))), by=c(unit_var, "ref_onset_time")]
+    stack_across_cohorts_balanced_treated_control[, valid_control_group := max(as.integer(get(control_subset_var2)*(ref_event_time==control_subset_event_time2))), by=c(unit_var, "ref_onset_time")]
+    stack_across_cohorts_balanced_treated_control <- stack_across_cohorts_balanced_treated_control[(treated==0 & valid_control_group==1)  | (treated==1 & valid_treated_group==1) ]
+    stack_across_cohorts_balanced_treated_control[, c("valid_treated_group", "valid_control_group") := NULL] # these variables are no longer needed
+    gc()
+  }
+
+  if(!is.na(treated_subset_var3) & is.na(control_subset_var3)){
+    stack_across_cohorts_balanced_treated_control[, valid_treated_group := max(as.integer(get(treated_subset_var3)*(ref_event_time==treated_subset_event_time3))), by=c(unit_var, "ref_onset_time")]
+    stack_across_cohorts_balanced_treated_control <- stack_across_cohorts_balanced_treated_control[treated==0 | valid_treated_group==1]
+    stack_across_cohorts_balanced_treated_control[, valid_treated_group := NULL] # this variable is no longer needed
+    gc()
+  }
+
+  if(!is.na(control_subset_var3) & is.na(treated_subset_var3)){
+    stack_across_cohorts_balanced_treated_control[, valid_control_group := max(as.integer(get(control_subset_var3)*(ref_event_time==control_subset_event_time3))), by=c(unit_var, "ref_onset_time")]
+    stack_across_cohorts_balanced_treated_control <- stack_across_cohorts_balanced_treated_control[valid_control_group==1  | treated==1 ]
+    stack_across_cohorts_balanced_treated_control[, valid_control_group := NULL] # this variable is no longer needed
+
+    gc()
+  }
+
+  if(!is.na(control_subset_var3) & !is.na(treated_subset_var3)){
+    stack_across_cohorts_balanced_treated_control[, valid_treated_group := max(as.integer(get(treated_subset_var3)*(ref_event_time==treated_subset_event_time3))), by=c(unit_var, "ref_onset_time")]
+    stack_across_cohorts_balanced_treated_control[, valid_control_group := max(as.integer(get(control_subset_var3)*(ref_event_time==control_subset_event_time3))), by=c(unit_var, "ref_onset_time")]
+    stack_across_cohorts_balanced_treated_control <- stack_across_cohorts_balanced_treated_control[(treated==0 & valid_control_group==1)  | (treated==1 & valid_treated_group==1) ]
+    stack_across_cohorts_balanced_treated_control[, c("valid_treated_group", "valid_control_group") := NULL] # these variables are no longer needed
+    gc()
+  }
+
+  if(!is.na(treated_subset_var4) & is.na(control_subset_var4)){
+    stack_across_cohorts_balanced_treated_control[, valid_treated_group := max(as.integer(get(treated_subset_var4)*(ref_event_time==treated_subset_event_time4))), by=c(unit_var, "ref_onset_time")]
+    stack_across_cohorts_balanced_treated_control <- stack_across_cohorts_balanced_treated_control[treated==0 | valid_treated_group==1]
+    stack_across_cohorts_balanced_treated_control[, valid_treated_group := NULL] # this variable is no longer needed
+    gc()
+  }
+
+  if(!is.na(control_subset_var4) & is.na(treated_subset_var4)){
+    stack_across_cohorts_balanced_treated_control[, valid_control_group := max(as.integer(get(control_subset_var4)*(ref_event_time==control_subset_event_time4))), by=c(unit_var, "ref_onset_time")]
+    stack_across_cohorts_balanced_treated_control <- stack_across_cohorts_balanced_treated_control[valid_control_group==1  | treated==1 ]
+    stack_across_cohorts_balanced_treated_control[, valid_control_group := NULL] # this variable is no longer needed
+
+    gc()
+  }
+
+  if(!is.na(control_subset_var4) & !is.na(treated_subset_var4)){
+    stack_across_cohorts_balanced_treated_control[, valid_treated_group := max(as.integer(get(treated_subset_var4)*(ref_event_time==treated_subset_event_time4))), by=c(unit_var, "ref_onset_time")]
+    stack_across_cohorts_balanced_treated_control[, valid_control_group := max(as.integer(get(control_subset_var4)*(ref_event_time==control_subset_event_time4))), by=c(unit_var, "ref_onset_time")]
+    stack_across_cohorts_balanced_treated_control <- stack_across_cohorts_balanced_treated_control[(treated==0 & valid_control_group==1)  | (treated==1 & valid_treated_group==1) ]
+    stack_across_cohorts_balanced_treated_control[, c("valid_treated_group", "valid_control_group") := NULL] # these variables are no longer needed
+    gc()
+  }
+
+  if(!is.na(treated_subset_var5) & is.na(control_subset_var5)){
+    stack_across_cohorts_balanced_treated_control[, valid_treated_group := max(as.integer(get(treated_subset_var5)*(ref_event_time==treated_subset_event_time5))), by=c(unit_var, "ref_onset_time")]
+    stack_across_cohorts_balanced_treated_control <- stack_across_cohorts_balanced_treated_control[treated==0 | valid_treated_group==1]
+    stack_across_cohorts_balanced_treated_control[, valid_treated_group := NULL] # this variable is no longer needed
+    gc()
+  }
+
+  if(!is.na(control_subset_var5) & is.na(treated_subset_var5)){
+    stack_across_cohorts_balanced_treated_control[, valid_control_group := max(as.integer(get(control_subset_var5)*(ref_event_time==control_subset_event_time5))), by=c(unit_var, "ref_onset_time")]
+    stack_across_cohorts_balanced_treated_control <- stack_across_cohorts_balanced_treated_control[valid_control_group==1  | treated==1 ]
+    stack_across_cohorts_balanced_treated_control[, valid_control_group := NULL] # this variable is no longer needed
+
+    gc()
+  }
+
+  if(!is.na(control_subset_var5) & !is.na(treated_subset_var5)){
+    stack_across_cohorts_balanced_treated_control[, valid_treated_group := max(as.integer(get(treated_subset_var5)*(ref_event_time==treated_subset_event_time5))), by=c(unit_var, "ref_onset_time")]
+    stack_across_cohorts_balanced_treated_control[, valid_control_group := max(as.integer(get(control_subset_var5)*(ref_event_time==control_subset_event_time5))), by=c(unit_var, "ref_onset_time")]
     stack_across_cohorts_balanced_treated_control <- stack_across_cohorts_balanced_treated_control[(treated==0 & valid_control_group==1)  | (treated==1 & valid_treated_group==1) ]
     stack_across_cohorts_balanced_treated_control[, c("valid_treated_group", "valid_control_group") := NULL] # these variables are no longer needed
     gc()
