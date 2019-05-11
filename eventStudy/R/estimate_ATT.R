@@ -18,7 +18,7 @@ ES_estimate_ATT <- function(ES_data,
                             ipw_composition_change = FALSE,
                             add_unit_fes = FALSE,
                             cohort_by_cohort = FALSE,
-                            num_cores = 1,
+                            num_cores = 1
                             ) {
 
   onset_times <- sort(unique(ES_data[, .N, by = eval(onset_time_var)][[onset_time_var]]))
@@ -555,7 +555,7 @@ ES_estimate_ATT <- function(ES_data,
     results[, event_time := as.integer(gsub("att", "", rn))]
     results[, rn := "att"]
   }
-  
+
   setnames(results, c("e"), onset_time_var)
   results[, pval := round(pval,8)]
 
